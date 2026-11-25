@@ -16,10 +16,11 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_REPO: chatwoot/chatwoot
+  DOCKER_REPO: ${{ vars.DOCKERHUB_REPOSITORY || 'chatwoot/chatwoot' }}
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   build:
@@ -141,3 +142,71 @@ jobs:
           fi
           
           docker buildx imagetools inspect $TAG
+
+  check_merged_pull_request:
+    needs:
+      - merge
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    outputs:
+      merged: ${{ steps.check.outputs.merged }}
+    steps:
+      - name: Check whether this commit was merged by a pull request
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          merged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+            --jq 'any(.[]; .base.ref == "develop" and .merged_at != null)')
+          echo "merged=$merged" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs:
+      - merge
+      - check_merged_pull_request
+    if: needs.check_merged_pull_request.outputs.merged == 'true'
+    concurrency:
+      group: production-vps-deploy
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy develop to production
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_APP_PATH: ${{ secrets.VPS_APP_PATH }}
+          DOCKER_REPO: ${{ env.DOCKER_REPO }}
+        run: |
+          remote_args=$(printf '%q %q' "$VPS_APP_PATH" "$DOCKER_REPO")
+          ssh "$VPS_USER@$VPS_HOST" "bash -lse -- $remote_args" <<'DEPLOY_SCRIPT'
+            app_path="$1"
+            image_repository="$2"
+            set -euo pipefail
+
+            cd "$app_path"
+            git fetch origin develop
+            if git show-ref --verify --quiet refs/heads/develop; then
+              git switch develop
+            else
+              git switch --track -c develop origin/develop
+            fi
+            git pull --ff-only origin develop
+
+            CHATWOOT_DOCKER_REPOSITORY="$image_repository" CHATWOOT_DOCKER_TAG=develop docker compose -f docker-compose.production.yaml pull rails sidekiq
+            CHATWOOT_DOCKER_REPOSITORY="$image_repository" CHATWOOT_DOCKER_TAG=develop docker compose -f docker-compose.production.yaml run --rm rails bundle exec rails db:chatwoot_prepare
+            CHATWOOT_DOCKER_REPOSITORY="$image_repository" CHATWOOT_DOCKER_TAG=develop docker compose -f docker-compose.production.yaml up -d --no-deps rails sidekiq
+          DEPLOY_SCRIPT
