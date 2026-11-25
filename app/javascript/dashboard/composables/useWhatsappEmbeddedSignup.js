@@ -4,10 +4,13 @@ import {
   setupFacebookSdk,
   initWhatsAppEmbeddedSignup,
   createMessageHandler,
+  normalizeBusinessData,
   isValidBusinessData,
   classifySignupEvent,
   SIGNUP_RESULT,
 } from 'dashboard/routes/dashboard/settings/inbox/channels/whatsapp/utils';
+
+const SIGNUP_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Drives Meta's WhatsApp embedded-signup popup (Facebook JS SDK). FB.login()
 // resolves an auth `code` while the WABA identifiers (waba_id, phone_number_id)
@@ -34,10 +37,12 @@ export function useWhatsappEmbeddedSignup() {
       let isCoexistence = false;
       let settled = false;
       let messageHandler;
+      let timeoutId;
 
       const settle = (fn, value) => {
         if (settled) return;
         settled = true;
+        clearTimeout(timeoutId);
         window.removeEventListener('message', messageHandler);
         isAuthenticating.value = false;
         fn(value);
@@ -47,14 +52,22 @@ export function useWhatsappEmbeddedSignup() {
       // no fixed order; only resolve once we're holding both.
       const resolveIfReady = () => {
         if (!authCode || !businessData) return;
+        const normalizedBusinessData = normalizeBusinessData(businessData);
         settle(resolve, {
           code: authCode,
-          business_id: businessData.business_id || '',
-          waba_id: businessData.waba_id,
-          phone_number_id: businessData.phone_number_id || '',
+          business_id: normalizedBusinessData.business_id || '',
+          waba_id: normalizedBusinessData.waba_id,
+          phone_number_id: normalizedBusinessData.phone_number_id || '',
           is_coexistence: isCoexistence,
         });
       };
+
+      timeoutId = setTimeout(() => {
+        const timeoutMessage = t(
+          'INBOX_MGMT.ADD.WHATSAPP.EMBEDDED_SIGNUP.TIMEOUT'
+        );
+        settle(reject, new Error(timeoutMessage));
+      }, SIGNUP_TIMEOUT_MS);
 
       messageHandler = createMessageHandler(data => {
         const result = classifySignupEvent(data);
@@ -63,14 +76,15 @@ export function useWhatsappEmbeddedSignup() {
           // Keep the first terminal event: a coexistence FINISH must win over a
           // later normal FINISH that can arrive before the auth code is known.
           if (businessData) return;
-          if (!isValidBusinessData(data.data)) {
+          const normalizedBusinessData = normalizeBusinessData(data.data);
+          if (!isValidBusinessData(normalizedBusinessData)) {
             const invalidData = t(
               'INBOX_MGMT.ADD.WHATSAPP.EMBEDDED_SIGNUP.INVALID_BUSINESS_DATA'
             );
             settle(reject, new Error(invalidData));
             return;
           }
-          businessData = data.data;
+          businessData = normalizedBusinessData;
           isCoexistence = result.isCoexistence;
           resolveIfReady();
         } else if (result.type === SIGNUP_RESULT.UNSUPPORTED) {

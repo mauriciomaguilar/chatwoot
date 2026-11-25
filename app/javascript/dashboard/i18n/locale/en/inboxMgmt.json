@@ -463,6 +463,7 @@
           "WAITING_FOR_AUTH": "Waiting for authentication...",
           "INVALID_BUSINESS_DATA": "Invalid business data received from Facebook. Please try again.",
           "UNSUPPORTED_COMPLETION": "The Meta setup finished without a WhatsApp phone number that can be connected. Please run the setup again and add a phone number.",
+          "TIMEOUT": "The Meta setup timed out. Reopen WhatsApp setup and complete every step in the Meta window.",
           "SIGNUP_ERROR": "Signup error occurred",
           "AUTH_NOT_COMPLETED": "Authentication not completed. Please restart the process.",
           "SUCCESS_FALLBACK": "WhatsApp Business Account has been successfully configured",

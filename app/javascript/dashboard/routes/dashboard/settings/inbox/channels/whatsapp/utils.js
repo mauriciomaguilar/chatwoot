@@ -29,10 +29,23 @@ export const initializeFacebook = (appId, apiVersion) => {
   });
 };
 
-// Only waba_id is guaranteed: Meta's coexistence FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING
-// event documents data: { waba_id } alone — no business_id or phone_number_id.
+export const normalizeBusinessData = businessData => {
+  if (!businessData || typeof businessData !== 'object') return businessData;
+
+  const messagingAccountIds = businessData.messaging_account_ids;
+  const wabaId =
+    businessData.waba_id ||
+    (Array.isArray(messagingAccountIds) && messagingAccountIds.length === 1
+      ? messagingAccountIds[0]
+      : null);
+
+  return wabaId ? { ...businessData, waba_id: wabaId } : businessData;
+};
+
+// Coexistence payloads differ by Embedded Signup version: v4 can return only
+// waba_id, while v5 returns messaging_account_ids and phone_number_id.
 export const isValidBusinessData = businessData => {
-  return Boolean(businessData && businessData.waba_id);
+  return Boolean(normalizeBusinessData(businessData)?.waba_id);
 };
 
 const COEXISTENCE_FINISH_EVENT = 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING';
@@ -131,9 +144,7 @@ export const initWhatsAppEmbeddedSignup = configId => {
         response_type: 'code',
         override_default_response_type: true,
         extras: {
-          setup: {},
-          featureType: 'whatsapp_business_app_onboarding',
-          sessionInfoVersion: '3',
+          version: 'v5',
         },
       }
     );
